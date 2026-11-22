@@ -37,6 +37,8 @@ def read_png(path):
     pos = 8
     first = True
     width = height = None
+    bit_depth = colour_type = None
+    idat_parts = []
     saw_iend = False
     while pos + 8 <= len(data):
         length, kind = struct.unpack(">I4s", data[pos:pos + 8])
@@ -57,7 +59,12 @@ def read_png(path):
                 fail(f"image is {width}x{height}, over {MAX_SIDE}x{MAX_SIDE}")
             if width == 0 or height == 0:
                 fail("image has a zero dimension")
+            if ctype not in (0, 2, 3, 4, 6):
+                fail(f"unknown PNG colour type {ctype}")
+            bit_depth, colour_type = depth, ctype
             first = False
+        if kind == b"IDAT":
+            idat_parts.append(body)
         if kind == b"IEND":
             if length != 0:
                 fail("IEND carries data")
@@ -70,6 +77,20 @@ def read_png(path):
         fail("no IHDR chunk found")
     if not saw_iend:
         fail("no IEND chunk found")
+    if not idat_parts:
+        fail("no IDAT chunk found")
+    # The pixel data must inflate to exactly what the header promises:
+    # one filter byte plus one row of samples per scanline.
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colour_type]
+    bits_per_pixel = channels * bit_depth
+    row_bytes = (width * bits_per_pixel + 7) // 8
+    try:
+        raw = zlib.decompress(b"".join(idat_parts))
+    except zlib.error as exc:
+        fail(f"IDAT data does not inflate: {exc}")
+    if len(raw) != height * (1 + row_bytes):
+        fail(f"inflated image data is {len(raw)} bytes, expected "
+             f"{height * (1 + row_bytes)}")
     return data, width, height
 
 
